@@ -1,0 +1,272 @@
+"""AI layer (Gemini): triage a note, draft a post in Meera's voice, lint the draft.
+No Telegram code here, so it can be tested offline."""
+import json
+import os
+import re
+
+from _http import HttpError, request
+from _voice import EXEMPLARS, VOICE_GUIDE
+
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+MAX_CHARS = 3000  # LinkedIn hard limit
+
+PILLARS = [
+    "Ingredient Deep-Dive", "Founder Story", "India-Specific Context", "Industry Transparency",
+    "Formulation Science", "Consumer Education", "Brand Philosophy",
+]
+
+AI_STUDIO = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+VERTEX_EXPRESS = "https://aiplatform.googleapis.com/v1/publishers/google/models/{m}:generateContent"
+_endpoint = None   # remembered after the first successful call
+_model = None
+
+
+def _gemini(url, system, user, max_tokens, json_mode):
+    body = {
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        # 2.5-series models spend part of this budget on thinking, so keep it generous.
+        "generationConfig": {"maxOutputTokens": max(max_tokens, 8192),
+                             "temperature": float(os.getenv("LLM_TEMPERATURE", "0.6"))},
+    }
+    if json_mode:
+        body["generationConfig"]["responseMimeType"] = "application/json"
+    out = request("POST", url, body=body, headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]}, timeout=120)
+    cands = out.get("candidates") or []
+    if not cands:
+        raise RuntimeError(f"Gemini returned no candidates: {json.dumps(out)[:300]}")
+    parts = (cands[0].get("content") or {}).get("parts") or []
+    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+
+
+def _call(system, user, max_tokens=2500, json_mode=False):
+    """One Gemini call. Works with AI Studio keys and Vertex AI express-mode keys; if the configured
+    model name is unknown it falls back to a current Flash model."""
+    global _endpoint, _model
+    endpoints = [_endpoint] if _endpoint else [AI_STUDIO, VERTEX_EXPRESS]
+    models = [_model] if _model else [MODEL] + [m for m in FALLBACK_MODELS if m != MODEL]
+    last = None
+    for ep in endpoints:
+        for m in models:
+            try:
+                text = _gemini(ep.format(m=m), system, user, max_tokens, json_mode)
+                _endpoint, _model = ep, m
+                return text
+            except HttpError as e:
+                last = e
+                if e.status == 404:
+                    continue          # model name not available here - try the next one
+                if e.status in (400, 401, 403) and ep != endpoints[-1]:
+                    break             # key not valid for this endpoint - try the other one
+                raise
+    raise last
+
+
+def active_model():
+    return _model or MODEL
+
+
+# =====================================================================
+# 1. TRIAGE - is this note worth a post?
+# =====================================================================
+TRIAGE_SYSTEM = f"""You are the editorial filter for Meera Pillai, founder of Skinstinct (D2C skincare, Mumbai).
+She drops raw notes into Telegram: factory observations, reactions to customer DMs, late-night reading.
+Most notes will never be posts. Your job is to decide which ones can become a LinkedIn post that
+sounds like her and says something only she could say.
+
+VOICE AND FACTS REFERENCE:
+{VOICE_GUIDE}
+
+SCORING (0-10, add these up):
+- Specificity (0-3): a concrete scene, number, mechanism or observation - not a mood or a slogan.
+- Expertise edge (0-3): something a formulator/founder knows that her readers don't.
+- Reader relevance (0-2): useful to urban Indian women 28-40 who are tired of being sold to.
+- Writable without invention (0-2): the post can be written from the note plus her published facts,
+  without making up numbers, studies or events.
+
+HARD REJECT (verdict "reject" regardless of score) if the note:
+- names or identifies a customer, employee, supplier contact or any private individual;
+- reveals details of unreleased products (she has two in formulation she is not ready to discuss);
+- attacks a named competitor brand;
+- would require a medical claim (treats/cures/heals a condition) or a diagnosis;
+- is a sales pitch, a discount, or purely personal/mood with no idea in it;
+- contains confidential commercial terms (pricing with manufacturers, margins, contracts).
+
+VERDICTS:
+- "develop": score >= 6, no hard reject, can be drafted now.
+- "hold": has a real idea but needs facts only Meera can supply first (list them).
+- "reject": score < 4 or any hard reject.
+
+Pillar must be one of: {", ".join(PILLARS)}.
+
+Return ONLY a JSON object, no prose, no code fences:
+{{"verdict": "develop|hold|reject", "score": 0, "pillar": "...",
+ "angle": "one sentence: the single idea the post would argue",
+ "hook": "the concrete detail from the note the post should open on",
+ "reason": "one short sentence explaining the verdict",
+ "needs_from_meera": ["facts she must confirm or supply"],
+ "hard_reject": null}}"""
+
+
+def parse_json(text):
+    try:
+        start, end = text.index("{"), text.rindex("}") + 1
+        return json.loads(text[start:end])
+    except (ValueError, json.JSONDecodeError):
+        return {"verdict": "hold", "score": 0, "pillar": None, "angle": "", "hook": "",
+                "reason": "Triage output could not be parsed - review manually.",
+                "needs_from_meera": [], "hard_reject": None}
+
+
+def triage(note_text):
+    out = parse_json(_call(TRIAGE_SYSTEM, f"NOTE:\n{note_text}", max_tokens=800, json_mode=True))
+    if out.get("hard_reject"):
+        out["verdict"] = "reject"
+    try:
+        out["score"] = max(0, min(10, int(out.get("score", 0))))
+    except (TypeError, ValueError):
+        out["score"] = 0
+    if out.get("pillar") not in PILLARS:
+        out["pillar"] = None
+    return out
+
+
+# =====================================================================
+# 2. DRAFT - write the post in her voice
+# =====================================================================
+DRAFT_SYSTEM = f"""You ghost-draft LinkedIn posts for Meera Pillai, founder of Skinstinct. She will read,
+edit and publish every post herself. Your draft is a starting point she should need to change
+very little - her last content writer failed because she spent more time rewriting than writing.
+
+{VOICE_GUIDE}
+
+{EXEMPLARS}
+
+NON-NEGOTIABLE RULES:
+1. Write only from (a) the note, (b) the facts listed in "Facts she has already published", and
+   (c) widely established formulation science stated at the level of certainty she would use.
+2. NEVER invent a statistic, study, date, quote, event, customer story or news item. If the post
+   needs a fact you don't have, write it as [VERIFY: what Meera needs to confirm] inline, and list it.
+3. Do not add a news hook or current industry data point. If a current reference would strengthen
+   the post, suggest it in <hook_idea> for Meera to find and check herself - never in the post.
+4. Prose paragraphs only. No emojis, hashtags, bullet points, headers or exclamation marks.
+   Spaced hyphen " - " instead of em dashes. British/Indian spelling.
+5. 1,600-2,800 characters. Hard maximum 3,000.
+6. Include her boundary move ("I'm not saying X. I'm saying Y.") where it fits naturally, and end
+   on a practical action for the reader or a flat closing statement - never a question to the audience.
+
+OUTPUT FORMAT (exactly these tags, nothing outside them):
+<post>
+the full post text
+</post>
+<verify>
+- one line per fact Meera must confirm before posting (or "none")
+</verify>
+<hook_idea>
+one optional line: a current angle she could look up herself, or "none"
+</hook_idea>
+<why>
+one line: why this note is worth a post
+</why>"""
+
+
+def _tag(text, name):
+    m = re.search(rf"<{name}>\s*(.*?)\s*</{name}>", text, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def parse_draft(raw):
+    post = _tag(raw, "post") or raw.strip()
+    verify = [l.lstrip("-• ").strip() for l in _tag(raw, "verify").splitlines()]
+    verify = [v for v in verify if v and v.lower() != "none"]
+    hook = _tag(raw, "hook_idea")
+    return {
+        "post": post,
+        "verify": verify,
+        "hook_idea": "" if hook.lower() in ("", "none") else hook,
+        "why": _tag(raw, "why"),
+    }
+
+
+def draft(note_text, triage_info=None, feedback=None, previous=None):
+    t = triage_info or {}
+    parts = [f"NOTE FROM MEERA:\n{note_text}"]
+    if t:
+        parts.append(
+            f"EDITORIAL DIRECTION:\nPillar: {t.get('pillar')}\nAngle: {t.get('angle')}\n"
+            f"Open on: {t.get('hook')}\nFacts still needed: {t.get('needs_from_meera') or 'none'}"
+        )
+    if previous and feedback:
+        parts.append(
+            f"YOUR PREVIOUS DRAFT:\n{previous}\n\nMEERA'S FEEDBACK (this overrides the guide):\n{feedback}\n\n"
+            "Revise the draft to address her feedback. Keep what she didn't object to."
+        )
+    return parse_draft(_call(DRAFT_SYSTEM, "\n\n".join(parts), max_tokens=2500))
+
+
+# =====================================================================
+# 3. LINT - deterministic voice checks (no AI)
+# =====================================================================
+BANNED = [
+    "glow", "radiant", "holy grail", "game-changer", "game changer", "miracle", "skin-loving",
+    "pamper", "self-care ritual", "thank you later", "will thank you", "unlock", "transform",
+    "journey", "secret to", "here's the thing", "let that sink in", "agree?", "thoughts?",
+    "follow for more", "humbled", "in today's world", "let's dive", "dive in", "buckle up",
+    "chemical-free", "toxin", "guaranteed", "cures", "heals",
+]
+US_SPELLINGS = {
+    "moisturizer": "moisturiser", "oxidize": "oxidise", "oxidizes": "oxidises", "color": "colour",
+    "optimize": "optimise", "stabilize": "stabilise", "stabilized": "stabilised", "fiber": "fibre",
+    "program": "programme", "behavior": "behaviour", "flavor": "flavour", "maximize": "maximise",
+    "minimize": "minimise", "sensitization": "sensitisation", "analyze": "analyse",
+}
+EMOJI = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F000-\U0001F2FF]")
+
+
+def lint(post):
+    problems = []
+    low = post.lower()
+    if len(post) > MAX_CHARS:
+        problems.append(f"Too long: {len(post)} characters (LinkedIn max {MAX_CHARS}).")
+    if len(post) < 900:
+        problems.append(f"Too short for her style: {len(post)} characters.")
+    if EMOJI.search(post):
+        problems.append("Contains emoji.")
+    if "!" in post:
+        problems.append("Contains exclamation mark.")
+    if re.search(r"(^|\s)#\w", post):
+        problems.append("Contains hashtags.")
+    if "—" in post or "–" in post:
+        problems.append("Uses em/en dash - Meera uses a spaced hyphen ' - '.")
+    if re.search(r"^\s*([-*•]|\d+[.)])\s", post, re.M):
+        problems.append("Contains a bulleted or numbered list.")
+    for w in BANNED:
+        if re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low):
+            problems.append(f"Off-voice phrase: '{w}'.")
+    for us, uk in US_SPELLINGS.items():
+        if re.search(rf"\b{us}\b", low):
+            problems.append(f"US spelling '{us}' - use '{uk}'.")
+    last = post.strip().splitlines()[-1] if post.strip() else ""
+    if last.rstrip().endswith("?"):
+        problems.append("Ends on a question to the audience.")
+    return problems
+
+
+REPAIR_SYSTEM = """You are a copy editor. Fix ONLY the listed problems in the post. Change nothing else:
+keep every sentence, fact and [VERIFY: ...] marker that is not part of a listed problem.
+Return the corrected post inside <post></post> and nothing else."""
+
+
+def make_draft(note_text, triage_info=None, feedback=None, previous=None):
+    """Draft -> lint -> one repair pass if needed. Returns dict with post, verify, hook_idea, why, lint."""
+    d = draft(note_text, triage_info, feedback, previous)
+    problems = lint(d["post"])
+    if problems:
+        fixed = _tag(_call(REPAIR_SYSTEM, "PROBLEMS:\n- " + "\n- ".join(problems) + f"\n\nPOST:\n{d['post']}"), "post")
+        if fixed:
+            d["post"] = fixed
+            problems = lint(fixed)
+    d["lint"] = problems
+    d["verify_markers"] = re.findall(r"\[VERIFY:[^\]]*\]", d["post"])
+    return d

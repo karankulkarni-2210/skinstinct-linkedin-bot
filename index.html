@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skinstinct Notes to Drafts</title>
+<meta name="description" content="Use case, parameters and live status for the Telegram bot that turns Meera Pillai's raw notes into LinkedIn drafts in her voice.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f7f5f1; --surface:#ffffff; --ink:#1d1b18; --muted:#6b665e; --line:#e4dfd6;
+  --accent:#2f5d50; --accent-soft:#e5efeb; --warn:#8a4b12; --warn-soft:#f6ebdf; --no:#7a2e2e; --no-soft:#f5e4e2;
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#151412; --surface:#1e1c19; --ink:#ece8e1; --muted:#a19b91; --line:#33302b;
+    --accent:#8cc3b0; --accent-soft:#1f2f2a; --warn:#e3a868; --warn-soft:#33271b; --no:#e19a92; --no-soft:#352120;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#151412; --surface:#1e1c19; --ink:#ece8e1; --muted:#a19b91; --line:#33302b;
+  --accent:#8cc3b0; --accent-soft:#1f2f2a; --warn:#e3a868; --warn-soft:#33271b; --no:#e19a92; --no-soft:#352120;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,system-ui,sans-serif}
+.wrap{max-width:920px;margin:0 auto;padding:48px 16px 80px}
+h1,h2,h3{font-family:Newsreader,Georgia,serif;font-weight:600;line-height:1.2;margin:0}
+h1{font-size:clamp(30px,5vw,44px);letter-spacing:-.01em}
+h2{font-size:26px;margin:56px 0 6px}
+h3{font-size:18px;margin-bottom:6px}
+p{margin:0 0 12px}
+.lede{font-size:18px;color:var(--muted);max-width:680px;margin-top:14px}
+.kicker{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:12px}
+.sub{color:var(--muted);margin-bottom:20px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.card .label{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px}
+.stat{font-family:Newsreader,Georgia,serif;font-size:34px;line-height:1}
+.quote{border-left:3px solid var(--accent);padding:4px 0 4px 16px;font-family:Newsreader,Georgia,serif;font-size:19px;font-style:italic;color:var(--ink);margin:18px 0}
+.flow{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));counter-reset:step}
+.flow .card{position:relative;padding-top:34px}
+.flow .card::before{counter-increment:step;content:counter(step);position:absolute;top:12px;left:18px;font-size:12px;font-weight:600;color:var(--accent)}
+.flow .card h3{font-family:Inter,sans-serif;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+.flow .card p{font-size:14px;margin:0}
+table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;font-size:15px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--bg)}
+tr:last-child td{border-bottom:0}
+td code,p code,li code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);border:1px solid var(--line);padding:1px 5px;border-radius:4px}
+.tablewrap{overflow-x:auto}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px}
+.pill.go{background:var(--accent-soft);color:var(--accent)}
+.pill.hold{background:var(--warn-soft);color:var(--warn)}
+.pill.no{background:var(--no-soft);color:var(--no)}
+.cut{background:var(--warn-soft);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+.cut h3{color:var(--warn)}
+ul{margin:0;padding-left:20px}
+li{margin-bottom:6px}
+.two{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:8px;vertical-align:middle}
+.status-dot.ok{background:var(--accent)}
+footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="kicker">MESA Case 1 · Founder's Office · Cohort C4</div>
+<h1>Meera's notes, turned into LinkedIn drafts she barely has to touch</h1>
+<p class="lede">A Telegram bot for Skinstinct's founder. It reads the notes she already drops into her own channel, decides which ones are worth a post, drafts them in her voice, and hands them back for her to approve. It never publishes anything.</p>
+
+<h2>Live status</h2>
+<p class="sub" id="status-line"><span class="status-dot" id="dot"></span><span id="status-text">Checking...</span></p>
+<div class="grid">
+  <div class="card"><div class="label">Notes captured</div><div class="stat" id="s-notes">-</div></div>
+  <div class="card"><div class="label">Worth a post, waiting</div><div class="stat" id="s-develop">-</div></div>
+  <div class="card"><div class="label">Drafts awaiting review</div><div class="stat" id="s-pending">-</div></div>
+  <div class="card"><div class="label">Drafts approved</div><div class="stat" id="s-approved">-</div></div>
+</div>
+
+<h2>Automation brief</h2>
+<p class="sub">The "why", taken from the case file.</p>
+<div class="two">
+  <div class="card"><h3>Pain</h3><p>About 60 notes captured in eight months, and none became posts. 40 abandoned drafts sit in Google Drive. The posts she does finish take 90 minutes to 3 hours each, and most of that is stalling, not writing. She hasn't posted in eleven weeks.</p></div>
+  <div class="card"><h3>User</h3><p>Meera Pillai, founder of Skinstinct (D2C skincare, Mumbai, ₹14-16 lakh a month in revenue). She has a pharma formulation background and writes for 28-40 year old urban women who are tired of being sold to. She has 6,200 LinkedIn followers.</p></div>
+  <div class="card"><h3>Outcome</h3><p>Three LinkedIn posts a week without it eating her time. Every draft is ready to review, sounds like her, and makes no claim she can't stand behind.</p></div>
+  <div class="card"><h3>Journey today</h3><p>Note goes into Telegram → forgotten → she opens a doc weeks later, writes two lines, decides it isn't good enough and closes it. A hired writer produced clean copy she spent longer rewriting than writing herself.</p></div>
+</div>
+<p class="quote">"I open the doc, I write two lines, I decide it's not good enough, I close it. By the time I come back to it two weeks later, the moment has passed."</p>
+<p class="sub">Why it's worth doing: her four published posts earned 47,000 impressions. One post brought 340 profile visits in 48 hours and three wholesale enquiries.</p>
+
+<h2>Components map</h2>
+<p class="sub">Trigger → Input → Context → Processing → AI → Output.</p>
+<div class="flow">
+  <div class="card"><h3>Trigger</h3><p>A new post in her notes channel (or a DM to the bot). Plus a daily run that drafts on Mon, Wed and Fri.</p></div>
+  <div class="card"><h3>Input</h3><p>The raw note: an observation, a customer DM reaction, a 2-liner, a pasted voice transcript, or a bulk .txt backlog.</p></div>
+  <div class="card"><h3>Context</h3><p>Her 4 LinkedIn posts in full, a voice guide drawn from all 15 published pieces, and the list of facts she has already made public.</p></div>
+  <div class="card"><h3>Processing</h3><p>Stores and de-duplicates notes, ranks the backlog, varies the topic from one post to the next, caps unreviewed drafts, and runs a rule-based voice check.</p></div>
+  <div class="card"><h3>AI</h3><p>Gemini, used twice: once to score and triage each note, once to write the draft (plus one repair pass if the voice check fails).</p></div>
+  <div class="card"><h3>Output</h3><p>A draft in her Telegram DM with Approve / Redraft / Later / Skip. Anything to fact-check is flagged as <code>[VERIFY]</code>. She posts it herself.</p></div>
+</div>
+
+<h2>Parameters</h2>
+<p class="sub">Every setting is written down so it can be defended and changed.</p>
+
+<h3 style="margin-top:22px">1. Is this note worth a post? Scored 0-10</h3>
+<div class="tablewrap"><table>
+<tr><th>Criterion</th><th>Points</th><th>What earns them</th></tr>
+<tr><td>Specificity</td><td>0-3</td><td>A concrete scene, number, mechanism or observation, not a mood or a slogan</td></tr>
+<tr><td>Expertise edge</td><td>0-3</td><td>Something a formulator or founder knows that her readers don't</td></tr>
+<tr><td>Reader relevance</td><td>0-2</td><td>Useful to urban Indian women aged 28-40 who distrust skincare marketing</td></tr>
+<tr><td>Writable without invention</td><td>0-2</td><td>Can be written from the note plus her published facts alone</td></tr>
+</table></div>
+
+<h3 style="margin-top:22px">2. Verdict thresholds</h3>
+<div class="tablewrap"><table>
+<tr><th>Verdict</th><th>Rule</th><th>What happens</th></tr>
+<tr><td><span class="pill go">develop</span></td><td>Score 6 or more, no hard reject</td><td>Joins the backlog, best first</td></tr>
+<tr><td><span class="pill hold">hold</span></td><td>A real idea, but it needs a fact only Meera has</td><td>The bot lists what it needs; she can force a draft with <code>/draft &lt;id&gt;</code></td></tr>
+<tr><td><span class="pill no">reject</span></td><td>Score under 4, or any hard reject</td><td>Never drafted</td></tr>
+</table></div>
+
+<div class="two" style="margin-top:14px">
+  <div class="card"><h3>Hard rejects</h3><ul>
+    <li>Names or identifies a customer, employee or supplier contact</li>
+    <li>Details of the two unreleased products</li>
+    <li>Attacks a named competitor</li>
+    <li>Needs a medical claim or a diagnosis</li>
+    <li>Sales pitch, discount, or a mood with no idea in it</li>
+    <li>Confidential commercial terms (pricing, margins, contracts)</li>
+  </ul></div>
+  <div class="card"><h3>Cadence and workload</h3><ul>
+    <li>Drafts on <strong>Mon, Wed, Fri</strong> in the morning (IST), which meets her 3 a week</li>
+    <li>On demand at any time with <code>/draft</code></li>
+    <li>No new draft while <strong>3</strong> are still waiting for review</li>
+    <li>Rotates topics: skips a pillar just used if another note is within 1 point</li>
+    <li>Bulk imports are scored 8 at a time; the rest are scored on the next daily run</li>
+  </ul></div>
+</div>
+
+<h3 style="margin-top:22px">3. Voice rules (from her 15 published pieces)</h3>
+<div class="tablewrap"><table>
+<tr><th>Rule</th><th>Setting</th><th>Checked by</th></tr>
+<tr><td>Length</td><td>1,600-2,800 characters, never over 3,000 (LinkedIn's limit)</td><td>Code</td></tr>
+<tr><td>Opening</td><td>A concrete scene, number, or claim about the reader's own product. Never a question</td><td>Prompt</td></tr>
+<tr><td>Structure</td><td>5-9 paragraphs of prose. No headers, bullets or numbered lists</td><td>Code + prompt</td></tr>
+<tr><td>Boundary move</td><td>"I'm not saying X. I'm saying Y." where it fits</td><td>Prompt</td></tr>
+<tr><td>Ending</td><td>A practical step for the reader or a flat statement. Never "Thoughts?"</td><td>Code + prompt</td></tr>
+<tr><td>Banned</td><td>Emoji, hashtags, "!", em dashes, glow / holy grail / game-changer / skin-loving / miracle / unlock / journey, medical verbs</td><td>Code</td></tr>
+<tr><td>Spelling</td><td>British/Indian (moisturiser, oxidise, colour, optimise)</td><td>Code</td></tr>
+<tr><td>Facts</td><td>Only from the note or her published facts. Anything else becomes <code>[VERIFY: ...]</code></td><td>Prompt, and flagged on approval</td></tr>
+</table></div>
+
+<h3 style="margin-top:22px">4. How we'll know it works</h3>
+<div class="tablewrap"><table>
+<tr><th>Measure</th><th>Target</th></tr>
+<tr><td>Posts published per week</td><td>3 (from 0 over the last 11 weeks)</td></tr>
+<tr><td>Meera's time per post</td><td>Under 15 minutes of review (from 90-180 minutes)</td></tr>
+<tr><td>Drafts approved without a redraft</td><td>At least 50% after the first month</td></tr>
+<tr><td>Invented facts in approved posts</td><td>Zero</td></tr>
+</table></div>
+
+<h2>The Cut</h2>
+<div class="cut">
+  <h3>Not built: automatic news hooks and current industry data points</h3>
+  <p>Meera asked for drafts that "reference something current". We didn't build that. Her authority comes from claims she can back up, and a pulled-in statistic she hasn't checked is the kind of unsupported claim she criticises other brands for making. Instead, the draft marks what needs checking with <code>[VERIFY]</code> and may suggest a current angle for her to look up herself.</p>
+  <p style="margin:0">Also left out on purpose: posting to LinkedIn (she turned down two tools that did everything end to end), voice-note transcription, and anything that changes her habit of dropping notes into Telegram.</p>
+</div>
+
+<h2>Using the bot</h2>
+<div class="tablewrap"><table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>/draft</code> · <code>/draft 12</code></td><td>Draft now from the best note, or from note #12</td></tr>
+<tr><td><code>/backlog</code></td><td>Notes worth a post, best first</td></tr>
+<tr><td><code>/note 12</code></td><td>Show a note, its score and why</td></tr>
+<tr><td><code>/triage</code></td><td>Score notes still waiting</td></tr>
+<tr><td><code>/stats</code> · <code>/pause</code> · <code>/resume</code></td><td>Counts; stop or restart the schedule</td></tr>
+<tr><td>Send a .txt file</td><td>Import a backlog, one note per block separated by <code>---</code></td></tr>
+</table></div>
+
+<footer>Skinstinct, Meera Pillai and all case data are fictional, built for learning purposes (MESA AI-Native Track). The bot is built with Telegram, Gemini, Supabase and Vercel.</footer>
+</div>
+
+<script>
+(async () => {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  try {
+    const r = await fetch('/api/stats', {cache: 'no-store'});
+    const d = await r.json();
+    if (!d.ok) throw new Error();
+    const n = d.notes || {}, dr = d.drafts || {};
+    set('s-notes', Object.values(n).reduce((a, b) => a + b, 0));
+    set('s-develop', n.develop || 0);
+    set('s-pending', dr.pending || 0);
+    set('s-approved', dr.approved || 0);
+    document.getElementById('dot').classList.add('ok');
+    set('status-text', 'Bot online. Figures update as notes arrive.');
+  } catch (e) {
+    set('status-text', 'Status unavailable right now.');
+  }
+})();
+</script>
+</body>
+</html>

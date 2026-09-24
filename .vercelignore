@@ -1,0 +1,6 @@
+tests/
+scripts/
+notes/
+voice/
+*.md
+!README.md

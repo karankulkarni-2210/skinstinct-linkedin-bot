@@ -15,13 +15,16 @@ TZ = dt.timezone(dt.timedelta(minutes=int(os.getenv("TZ_OFFSET_MINUTES", "330"))
 DRAFT_DAYS = os.getenv("DRAFT_DAYS", "mon,wed,fri")
 MAX_PENDING = int(os.getenv("MAX_PENDING_DRAFTS", "3"))
 ACK_CAPTURES = os.getenv("ACK_CAPTURES", "true").lower() == "true"
+# Draft straight away when a channel/DM note is judged worth a post (the schedule then only sweeps
+# the backlog, e.g. bulk imports). Set AUTO_DRAFT=false to draft only on schedule or /draft.
+AUTO_DRAFT = os.getenv("AUTO_DRAFT", "true").lower() == "true"
 TRIAGE_BATCH = int(os.getenv("TRIAGE_BATCH", "8"))
 
 LABEL = {"develop": "worth a post", "hold": "needs a fact from you", "reject": "not a post"}
 
 HELP = """I turn your Telegram notes into LinkedIn drafts for you to review. I never post anything.
 
-Drop notes in your notes channel as usual (or send them to me here). I draft on {days} mornings and send the draft here.
+Drop notes in your notes channel as usual (or send them to me here). If a note is worth a post, I draft it straight away and send it here. On {days} mornings I also draft the best note still waiting in the backlog.
 
 /draft - draft from the best note now
 /draft 12 - draft from note #12
@@ -56,9 +59,18 @@ def capture(text, source, msg_id=None):
         return None
     t = brain.triage(text)
     store.set_triage(note_id, t)
-    if ACK_CAPTURES:
-        say(f"Note #{note_id} captured - {LABEL.get(t['verdict'], t['verdict'])} ({t.get('score', 0)}/10). "
-            f"{t.get('reason', '')}")
+    verdict, score = t.get("verdict"), t.get("score", 0)
+    if verdict == "develop" and AUTO_DRAFT:
+        say(f"Note #{note_id} is worth a post ({score}/10). Drafting it now - about 30 seconds.")
+        deliver_draft(note_id=note_id)
+    elif verdict == "hold":
+        needs = "; ".join(t.get("needs_from_meera") or []) or "a fact only you have"
+        say(f"Note #{note_id} has a post in it ({score}/10), but I need from you: {needs}. "
+            f"Reply with it, or send /draft {note_id} and I'll mark the gaps as [VERIFY].")
+    elif verdict == "reject":
+        say(f"Note #{note_id} saved, but it isn't a post ({score}/10): {t.get('reason', '')}")
+    elif ACK_CAPTURES:
+        say(f"Note #{note_id} captured - {LABEL.get(verdict, verdict)} ({score}/10). {t.get('reason', '')}")
     return note_id
 
 

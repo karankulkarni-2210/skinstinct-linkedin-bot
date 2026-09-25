@@ -220,7 +220,9 @@ def news_angle(note_text, triage_info=None):
         return None
     t = triage_info or {}
     kws = t.get("keywords") or []
-    tries = [t.get("search_phrase")] + ([" ".join(kws[:2])] if len(kws) >= 2 else []) + kws[:1]
+    quoted = [f'"{k}"' for k in kws if " " in k][:2]         # exact-phrase search stops "masking" matching "mask"
+    tries = ([" ".join(quoted[:1] + ["cosmetics"])] if quoted else []) + [t.get("search_phrase")] + \
+            ([" ".join(quoted)] if len(quoted) == 2 else []) + ([" ".join(kws[:2])] if len(kws) >= 2 else [])
     for phrase in [p for p in tries if p]:
         try:
             item = fetch_news(phrase)
@@ -405,6 +407,8 @@ def lint(post):
 REPAIR_SYSTEM = """You are a copy editor for Meera Pillai. Fix ONLY the listed problems in the post. Change nothing
 else: keep every fact, hedge and [VERIFY: ...] marker. For "too formal", switch spelled-out forms to
 contractions (it's, doesn't, I'm, we're, isn't, that's) except where one is deliberate emphasis.
+For "too long", cut to about 2,500 characters by trimming explanation and repetition - keep the
+opening, her own phrases from the note, the boundary move and the closing action.
 Return the corrected post inside <post></post> and nothing else."""
 
 
@@ -415,11 +419,14 @@ def make_draft(note_text, triage_info=None, feedback=None, previous=None, news=N
         news = news_angle(note_text, triage_info)
     d = draft(note_text, triage_info, feedback, previous, news)
     problems = lint(d["post"])
-    if problems:
+    for _ in range(2):                      # up to two repair passes (length often needs a second)
+        if not problems:
+            break
         fixed = _tag(_call(REPAIR_SYSTEM, "PROBLEMS:\n- " + "\n- ".join(problems) + f"\n\nPOST:\n{d['post']}"), "post")
-        if fixed:
-            d["post"] = fixed
-            problems = lint(fixed)
+        if not fixed:
+            break
+        d["post"] = fixed
+        problems = lint(fixed)
     d["lint"] = problems
     d["news"] = news
     d["news_used"] = bool(news) and d.get("news_used", False)

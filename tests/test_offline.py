@@ -269,7 +269,7 @@ def test_dm_falls_back_to_channel(fake):
 
 def test_news_item_used_gets_verify_flag_and_is_shown(fake):
     bot.capture("Batch fourteen pH drift after the supplier changed the preservative blend", "channel")
-    assert "cosmetic%20preservative%20change%20pH" in fake.news_queries[0]      # searched with the note's phrase
+    assert "%22pH%20drift%22%20cosmetics" in fake.news_queries[0]             # exact phrase from the note
     assert "NEWS ITEM" in fake.last_user and "Example Times" in fake.last_user    # given to the drafter
     assert "genuinely relevant" in fake.last_user and "ignore it" in fake.last_user
     d = fake.tables["drafts"][0]
@@ -278,6 +278,20 @@ def test_news_item_used_gets_verify_flag_and_is_shown(fake):
     checks = texts(fake)[-1]
     assert "Keywords from your note: pH drift, preservative blend, certificate of analysis" in checks
     assert "News used (Google News" in checks
+
+
+def test_two_repair_passes_for_length(monkeypatch):
+    calls = []
+
+    def fake_call(system, user, max_tokens=0, json_mode=False):
+        calls.append(system)
+        if system is brain.REPAIR_SYSTEM:
+            return f"<post>{'x' * 3100 if len(calls) == 2 else GOOD}</post>"
+        return f"<post>{'y' * 3200}</post><verify>none</verify>"
+
+    monkeypatch.setattr(brain, "_call", fake_call)
+    d = brain.make_draft("note", {}, find_news=False)
+    assert len(calls) == 3 and d["post"] == GOOD and d["lint"] == []
 
 
 def test_news_ignored_when_it_doesnt_fit(fake):

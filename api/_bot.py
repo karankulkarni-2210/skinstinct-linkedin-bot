@@ -7,6 +7,7 @@ import os
 import _brain as brain
 import _store as store
 import _tg as tg
+from _http import HttpError
 
 log = logging.getLogger("skinstinct")
 
@@ -47,9 +48,32 @@ def channel_id():
     return int(v) if v else None
 
 
+# Where replies go for the update being handled. Notes posted in the channel get their answer (and the
+# draft) in the channel; DMs get answered in the DM. Reset at the start of every update.
+_reply_to = None
+
+
 def say(text, reply_markup=None):
-    oid = owner_id()
-    return tg.send(oid, text, reply_markup) if oid else None
+    """Send to the current reply target (channel or owner DM). If the owner has never pressed Start,
+    Telegram refuses DMs (PEER_ID_INVALID / 403) - fall back to the notes channel so nothing is lost."""
+    target = _reply_to or owner_id()
+    if not target:
+        return None
+    try:
+        return tg.send(target, text, reply_markup)
+    except HttpError as e:
+        cid = channel_id()
+        if e.status in (400, 403) and cid and target != cid:
+            log.warning("DM to %s failed (%s); posting in channel instead", target, e.status)
+            return tg.send(cid, text, reply_markup)
+        raise
+
+
+def typing():
+    try:
+        tg.call("sendChatAction", chat_id=_reply_to or owner_id(), action="typing")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------- capture + triage
@@ -115,7 +139,7 @@ def deliver_draft(note_id=None, scheduled=False, feedback=None, previous=None):
         say("No note in the backlog is strong enough for a post right now, so I haven't drafted anything. "
             "Drop a few more notes in the channel, or /backlog to see what's there.")
         return "skipped: empty"
-    tg.call("sendChatAction", chat_id=owner_id(), action="typing")
+    typing()
     d = brain.make_draft(note["text"], note.get("triage"), feedback, previous["body"] if previous else None)
     draft_id = store.add_draft(note["id"], d["post"], d, (previous["version"] + 1) if previous else 1)
     send_draft(draft_id, note, d)
@@ -138,6 +162,8 @@ def scheduled_run(now=None):
 
 # ---------------------------------------------------------------- update routing
 def handle_update(u):
+    global _reply_to
+    _reply_to = None
     if "channel_post" in u:
         return on_channel_post(u["channel_post"])
     if "callback_query" in u:
@@ -169,16 +195,20 @@ def on_channel_post(p):
         say(f"Now listening to channel '{p['chat'].get('title')}'. Every note you drop there gets triaged.")
     if p["chat"]["id"] != cid:
         return
+    global _reply_to
+    _reply_to = cid                      # answer in the channel the note came from
     if p.get("voice") or p.get("audio"):
         say("Voice note received in the channel. I only read text for now - paste the transcript into the "
             "channel or send it to me here.")
         return
     text = p.get("text") or p.get("caption")
     if text and not text.startswith("/"):
+        if store.kv_get("awaiting_feedback"):   # she tapped Redraft; this post is the feedback
+            return on_private_text(text, p.get("message_id"), source="channel")
         capture(text, "channel", p.get("message_id"))
 
 
-def on_private_text(text, msg_id):
+def on_private_text(text, msg_id, source="dm"):
     awaiting = store.kv_get("awaiting_feedback")
     if awaiting:
         store.kv_set("awaiting_feedback", None)
@@ -188,7 +218,7 @@ def on_private_text(text, msg_id):
             say("Redrafting with your note...")
             deliver_draft(note_id=prev["note_id"], feedback=text, previous=prev)
             return
-    capture(text, "dm", msg_id)
+    capture(text, source, msg_id)
 
 
 def on_document(doc):
@@ -214,6 +244,9 @@ def on_button(q):
         say("That draft no longer exists.")
         return
     m = q.get("message") or {}
+    global _reply_to
+    if m and m.get("chat", {}).get("type") == "channel":
+        _reply_to = m["chat"]["id"]
     if m:
         tg.call("editMessageReplyMarkup", chat_id=m["chat"]["id"], message_id=m["message_id"],
                 reply_markup={"inline_keyboard": []})

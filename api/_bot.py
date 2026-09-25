@@ -21,7 +21,6 @@ ACK_CAPTURES = os.getenv("ACK_CAPTURES", "true").lower() == "true"
 AUTO_DRAFT = os.getenv("AUTO_DRAFT", "true").lower() == "true"
 TRIAGE_BATCH = int(os.getenv("TRIAGE_BATCH", "8"))
 
-LABEL = {"develop": "worth a post", "hold": "needs a fact from you", "reject": "not a post"}
 
 HELP = """I turn your Telegram notes into LinkedIn drafts for you to review. I never post anything.
 
@@ -85,16 +84,14 @@ def capture(text, source, msg_id=None):
     store.set_triage(note_id, t)
     verdict, score = t.get("verdict"), t.get("score", 0)
     if verdict == "develop" and AUTO_DRAFT:
-        say(f"Note #{note_id} is worth a post ({score}/10). Drafting it now - about 30 seconds.")
+        say(f"Note #{note_id} scored {score}/10 - {t.get('reason', '')} Drafting it now, about 30 seconds.")
         deliver_draft(note_id=note_id)
-    elif verdict == "hold":
-        needs = "; ".join(t.get("needs_from_meera") or []) or "a fact only you have"
-        say(f"Note #{note_id} has a post in it ({score}/10), but I need from you: {needs}. "
-            f"Reply with it, or send /draft {note_id} and I'll mark the gaps as [VERIFY].")
-    elif verdict == "reject":
-        say(f"Note #{note_id} saved, but it isn't a post ({score}/10): {t.get('reason', '')}")
-    elif ACK_CAPTURES:
-        say(f"Note #{note_id} captured - {LABEL.get(verdict, verdict)} ({score}/10). {t.get('reason', '')}")
+    elif verdict == "develop":
+        say(f"Note #{note_id} scored {score}/10 - {t.get('reason', '')} It's in the backlog for the next draft.")
+    else:
+        # B1-1: below the threshold -> short explanation back to Telegram, and stop.
+        say(f"No draft for note #{note_id} - it scored {score}/10. {t.get('reason', '')} "
+            f"(Send /draft {note_id} if you want one anyway.)")
     return note_id
 
 
@@ -122,17 +119,17 @@ def send_draft(draft_id, note, d):
         f"{len(d['post'])} chars\nWhy this note: {d.get('why') or t.get('reason', '')}")
     say(d["post"])
     checks = [f"- VERIFY: {v}" for v in d.get("verify", [])] + [f"- Style: {p}" for p in d.get("lint", [])]
-    kws = (d.get("news") or {}).get("keywords") or t.get("keywords") or []
+    n = d.get("news") or {}
+    kws = n.get("keywords") or t.get("keywords") or []
     if kws:
         checks.append("- Keywords from your note: " + ", ".join(kws))
-    n = d.get("news")
-    if n:
-        checks.append(f"- News angle used: \"{n['headline']}\" - {n['source']}, {n['date']}\n"
-                      f"  Fact used: {n['fact']}\n"
-                      f"  Matches your keywords: {', '.join(n.get('matched') or []) or '-'}\n"
-                      f"  Check the source before posting: {n['urls'][0]}")
+    if n and d.get("news_used"):
+        checks.append(f"- News used (Google News, searched \"{n.get('search_phrase', '')}\"): \"{n['headline']}\" - "
+                      f"{n['source']}, {n['date']}\n  Check it before posting: {n['url']}")
+    elif n:
+        checks.append(f"- News found but not used (didn't fit naturally): \"{n['headline']}\" - {n['source']}")
     elif brain.NEWS_ANGLE:
-        checks.append("- News angle: nothing recent and relevant found for these keywords, so none was added.")
+        checks.append("- News: no Google News result for these keywords, so none was added.")
     if d.get("hook_idea"):
         checks.append(f"- Another angle you could look up: {d['hook_idea']}")
     say("Check before posting:\n" + ("\n".join(checks) if checks else "- Nothing flagged."), keyboard(draft_id))

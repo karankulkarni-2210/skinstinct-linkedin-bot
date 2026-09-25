@@ -11,6 +11,7 @@ MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 NEWS_ANGLE = os.getenv("NEWS_ANGLE", "true").lower() == "true"
 FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
 MAX_CHARS = 3000  # LinkedIn hard limit
+SCORE_THRESHOLD = int(os.getenv("SCORE_THRESHOLD", "6"))
 
 PILLARS = [
     "Ingredient Deep-Dive", "Founder Story", "India-Specific Context", "Industry Transparency",
@@ -82,29 +83,31 @@ sounds like her and says something only she could say.
 VOICE AND FACTS REFERENCE:
 {VOICE_GUIDE}
 
-SCORING (0-10, add these up):
-- Specificity (0-3): a concrete scene, number, mechanism or observation - not a mood or a slogan.
-- Expertise edge (0-3): something a formulator/founder knows that her readers don't.
-- Reader relevance (0-2): useful to urban Indian women 28-40 who are tired of being sold to.
-- Writable without invention (0-2): the post can be written from the note plus her published facts,
-  without making up numbers, studies or events.
+SCORE (0-10) - be strict. Most raw notes are NOT posts; if every note passes, you're too lenient.
+Anchors:
+- 0-1: a task reminder, logistics or to-do ("call supplier re invoice", "order labels"), a mood
+  ("tired, long day"), or a sales push ("50% off this weekend").
+- 2-3: an abandoned half-thought or bare topic with no observation ("something about retinol??",
+  "ceramides - write about this"), or a note that only works by attacking a named brand.
+- 4-5: a real topic, but generic - no specific detail, number, scene or mechanism from her own work.
+- 6-7: a specific observation or experience (a batch, a test, a customer question, a number) with an
+  idea a reader would learn from.
+- 8-10: specific AND only she could write it: formulation expertise, a real number or mechanism, and
+  a clear point for the reader.
+Within that, weigh: specificity, her expertise edge, relevance to urban Indian women 28-40 who are
+tired of being sold to, and whether it can be written without inventing anything.
 
-HARD REJECT (verdict "reject" regardless of score) if the note:
+HARD REJECT - score 3 or below regardless of quality, and name the reason, if the note:
 - names or identifies a customer, employee, supplier contact or any private individual;
 - reveals details of unreleased products (she has two in formulation she is not ready to discuss);
 - attacks a named competitor brand;
 - would require a medical claim (treats/cures/heals a condition) or a diagnosis;
-- is a sales pitch, a discount, or purely personal/mood with no idea in it;
+- is a sales pitch or discount;
 - contains confidential commercial terms (pricing with manufacturers, margins, contracts).
-
-VERDICTS:
-- "develop": score >= 6, no hard reject, can be drafted now.
-- "hold": has a real idea but needs facts only Meera can supply first (list them).
-- "reject": score < 4 or any hard reject.
 
 Pillar must be one of: {", ".join(PILLARS)}.
 
-KEYWORDS: 3-6 search terms lifted from the note's own specifics, 1-4 words each, that a journalist or
+KEYWORDS: 3-5 search terms lifted from the note's own specifics, 1-4 words each, that a journalist or
 researcher would actually use. Each must name a specific thing the note mentions or directly implies:
 - a named ingredient or ingredient system: "niacinamide", "phenoxyethanol", "preservative blend"
 - a measurement or property: "finished product pH", "0.4 pH drop", "emollient texture"
@@ -115,14 +118,17 @@ NEVER use category words on their own: "ingredients", "processes", "regulations"
 "quality", "formulation", "brand", "customers", "industry". Example for a note about a supplier quietly
 changing a preservative and the batch pH dropping: ["preservative blend change", "finished product pH",
 "raw material specification change", "certificate of analysis", "batch-to-batch variation"].
+SEARCH PHRASE: one short news-search phrase (3-6 words) built from the keywords, e.g.
+"cosmetic preservative supplier change pH".
 
 Return ONLY a JSON object, no prose, no code fences:
-{{"verdict": "develop|hold|reject", "score": 0, "pillar": "...",
+{{"score": 0, "reason": "one line: why this score",
+ "pillar": "...",
  "angle": "one sentence: the single idea the post would argue",
  "hook": "the concrete detail from the note the post should open on",
- "reason": "one short sentence explaining the verdict",
  "needs_from_meera": ["facts she must confirm or supply"],
- "keywords": ["3-6 specific search keywords - see KEYWORDS below"],
+ "keywords": ["3-5 specific search keywords - see KEYWORDS above"],
+ "search_phrase": "short news-search phrase",
  "hard_reject": null}}"""
 
 
@@ -131,22 +137,26 @@ def parse_json(text):
         start, end = text.index("{"), text.rindex("}") + 1
         return json.loads(text[start:end])
     except (ValueError, json.JSONDecodeError):
-        return {"verdict": "hold", "score": 0, "pillar": None, "angle": "", "hook": "",
-                "reason": "Triage output could not be parsed - review manually.",
+        return {"score": 0, "pillar": None, "angle": "", "hook": "",
+                "reason": "I couldn't read the scoring result - send /draft <id> to draft it anyway.",
                 "needs_from_meera": [], "hard_reject": None}
 
 
 def triage(note_text):
     out = parse_json(_call(TRIAGE_SYSTEM, f"NOTE:\n{note_text}", max_tokens=800, json_mode=True))
-    if out.get("hard_reject"):
-        out["verdict"] = "reject"
     try:
         out["score"] = max(0, min(10, int(out.get("score", 0))))
     except (TypeError, ValueError):
         out["score"] = 0
+    if out.get("hard_reject"):
+        out["score"] = min(out["score"], 3)
+        out["reason"] = out.get("reason") or str(out["hard_reject"])
+    # B1-1: the score alone decides. 6+ drafts; below 6 gets a one-line "why not" and stops.
+    out["verdict"] = "develop" if out["score"] >= SCORE_THRESHOLD else "reject"
     if out.get("pillar") not in PILLARS:
         out["pillar"] = None
-    out["keywords"] = clean_keywords(out.get("keywords"))
+    out["keywords"] = clean_keywords(out.get("keywords"))[:5]
+    out["search_phrase"] = re.sub(r"\s+", " ", str(out.get("search_phrase") or " ".join(out["keywords"][:3]))).strip()
     return out
 
 
@@ -171,52 +181,59 @@ def clean_keywords(kw):
 
 
 # =====================================================================
-# 2a. NEWS ANGLE - one current, real, sourced item (B1). Gemini + Google Search grounding.
+# 2a. NEWS ANGLE (B1-2) - top Google News result for the note's search phrase. No account, no key.
 # =====================================================================
-NEWS_SYSTEM = """You research one current reference for a LinkedIn post by Meera Pillai, a Mumbai skincare
-founder with a pharma formulation background. Use Google Search. Find ONE real news story, regulatory
-update, or published study from the last 6 months that connects directly to the note's angle and would
-matter to urban Indian women who buy skincare. Prefer India-specific items (CDSCO, BIS, Indian market,
-Indian climate) or peer-reviewed ingredient research. Never invent or guess: if you can't find a
-specific, dated, relevant item, return <none/>.
+GOOGLE_NEWS = "https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en"
 
-Build your searches from the KEYWORDS taken from her note - they're specific on purpose (named
-ingredients, measurements, tests, regulators). Search them as given, alone or paired, adding "India"
-where it helps; don't broaden them into generic terms like "skincare regulations". The item must
-genuinely cover at least one keyword, not just the general topic.
 
-Return exactly:
-<keywords>comma-separated keywords you searched with (the specific ones given, or 3-6 equally specific ones from the note)</keywords>
-<matched>comma-separated keywords the item actually covers</matched>
-<headline>the item's headline or title</headline>
-<source>publication or organisation name</source>
-<date>publication date as reported</date>
-<fact>the single fact the post could use, stated exactly as the source reports it</fact>
-<link>one sentence: how it connects to the note</link>"""
+def _strip_html(s):
+    import html
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", s or ""))).strip()
+
+
+def fetch_news(phrase):
+    """Top Google News result for `phrase`: {headline, source, date, summary, url} or None."""
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    if not phrase:
+        return None
+    raw = request("GET", GOOGLE_NEWS.format(q=urllib.parse.quote(phrase)), raw=True, timeout=20,
+                  headers={"User-Agent": "Mozilla/5.0 (skinstinct-bot)"})
+    item = ET.fromstring(raw).find("./channel/item")
+    if item is None:
+        return None
+    source = (item.findtext("source") or "").strip()
+    title = (item.findtext("title") or "").strip()
+    if source and title.endswith(" - " + source):
+        title = title[: -len(" - " + source)]
+    summary = _strip_html(item.findtext("description"))
+    if not summary or summary.startswith(title[:40]):     # Google's blurb often just repeats the title
+        summary = title
+    return {"headline": title, "source": source, "date": (item.findtext("pubDate") or "").strip()[:16],
+            "summary": summary[:240], "url": (item.findtext("link") or "").strip()}
 
 
 def news_angle(note_text, triage_info=None):
-    """Returns {headline, source, date, fact, link, urls} or None. Never raises - drafting must not
-    fail because search did."""
+    """Search Google News with the note's phrase (falling back to its first two keywords).
+    Returns the top item plus the keywords/phrase used, or None. Never raises."""
     if not NEWS_ANGLE:
         return None
     t = triage_info or {}
-    try:
-        kw = ", ".join(t.get("keywords") or []) or "(pick 3-6 from the note yourself)"
-        text, meta = _call(NEWS_SYSTEM, f"NOTE:\n{note_text}\n\nANGLE: {t.get('angle', '')}\n\nKEYWORDS: {kw}",
-                           max_tokens=2000,
-                           tools=[{"google_search": {}}], with_meta=True)
-    except Exception:
-        return None
-    if "<none" in text or not _tag(text, "headline"):
-        return None
-    urls = [c["web"]["uri"] for c in (meta.get("groundingChunks") or []) if c.get("web", {}).get("uri")][:3]
-    if not urls:                      # no grounding = no evidence it's real; don't use it
-        return None
-    split = lambda v: [x.strip() for x in v.split(",") if x.strip()]
-    return {k: _tag(text, k) for k in ("headline", "source", "date", "fact", "link")} | {
-        "urls": urls, "keywords": clean_keywords(split(_tag(text, "keywords"))) or (t.get("keywords") or []),
-        "matched": split(_tag(text, "matched"))}
+    kws = t.get("keywords") or []
+    tries = [t.get("search_phrase")] + ([" ".join(kws[:2])] if len(kws) >= 2 else []) + kws[:1]
+    for phrase in [p for p in tries if p]:
+        try:
+            item = fetch_news(phrase)
+        except Exception:
+            item = None
+        if item:
+            return item | {"keywords": kws, "search_phrase": phrase}
+    return None
+
+
+def verify_flag(news):
+    return (f"[VERIFY NEWS: this draft uses \"{news['headline']}\" ({news['source']}, {news['date']}). "
+            f"Check the article before posting: {news['url']}]")
 
 
 # =====================================================================
@@ -232,13 +249,14 @@ very little - her last content writer failed because she spent more time rewriti
 
 NON-NEGOTIABLE RULES:
 1. Write only from (a) the note, (b) the facts listed in "Facts she has already published", (c) the
-   NEWS ANGLE if one is given, and (d) widely established formulation science stated at the level of
+   NEWS ITEM if one is given and you use it, and (d) widely established formulation science stated at the level of
    certainty she would use.
 2. NEVER invent a statistic, study, date, quote, event, customer story, test result or sensory detail.
    If the post needs a fact you don't have, write it as [VERIFY: what Meera needs to confirm] inline.
-3. NEWS ANGLE: if one is given, use it in one or two sentences at most, attributed to its source by
-   name ("A [source] report this month..."), stating only its fact - never embellish it. It supports
-   her point; it never becomes the point. If none is given, don't mention any news or outside data.
+3. NEWS ITEM: if this news item is genuinely relevant, use it to make the post timely. If it doesn't
+   fit naturally, ignore it. If you use it: one or two sentences at most, attributed to its source by
+   name, stating only what the headline and summary say - never embellish it. It supports her point;
+   it never becomes the point. Say whether you used it in <news_used>.
 4. CONTRACTIONS like she writes: it's, doesn't, I'm, we're, isn't, that's, won't, I've. Spell a form
    out only for deliberate emphasis. A draft full of "it is / does not / I am" is wrong.
 5. KEEP HER WORDS: carry the note's sharpest phrases into the post nearly verbatim. Keep her hedges
@@ -262,6 +280,9 @@ the full post text
 <hook_idea>
 one optional line: a current angle she could look up herself, or "none"
 </hook_idea>
+<news_used>
+yes or no
+</news_used>
 <why>
 one line: why this note is worth a post
 </why>"""
@@ -282,6 +303,7 @@ def parse_draft(raw):
         "verify": verify,
         "hook_idea": "" if hook.lower() in ("", "none") else hook,
         "why": _tag(raw, "why"),
+        "news_used": _tag(raw, "news_used").lower().startswith("y"),
     }
 
 
@@ -294,8 +316,9 @@ def draft(note_text, triage_info=None, feedback=None, previous=None, news=None):
             f"Open on: {t.get('hook')}\nFacts still needed: {t.get('needs_from_meera') or 'none'}"
         )
     if news:
-        parts.append(f"NEWS ANGLE (found by search; Meera verifies before posting):\nHeadline: {news['headline']}\n"
-                     f"Source: {news['source']} ({news['date']})\nFact: {news['fact']}\nConnection: {news['link']}")
+        parts.append(f"NEWS ITEM (top Google News result for \"{news.get('search_phrase', '')}\"). If this news item is "
+                     f"genuinely relevant, use it to make the post timely. If it doesn't fit naturally, ignore it.\n"
+                     f"Headline: {news['headline']}\nSource: {news['source']} ({news['date']})\nSummary: {news['summary']}")
     if previous and feedback:
         parts.append(
             f"YOUR PREVIOUS DRAFT:\n{previous}\n\nMEERA'S FEEDBACK (this overrides the guide):\n{feedback}\n\n"
@@ -386,7 +409,7 @@ Return the corrected post inside <post></post> and nothing else."""
 
 
 def make_draft(note_text, triage_info=None, feedback=None, previous=None, news=None, find_news=True):
-    """News angle (B1) -> draft -> lint -> one repair pass if needed.
+    """News item (B1-2) -> draft -> lint -> one repair pass if needed -> verify flag if news used.
     Returns dict with post, verify, hook_idea, why, lint, news, verify_markers."""
     if news is None and find_news and not previous:
         news = news_angle(note_text, triage_info)
@@ -399,5 +422,8 @@ def make_draft(note_text, triage_info=None, feedback=None, previous=None, news=N
             problems = lint(fixed)
     d["lint"] = problems
     d["news"] = news
-    d["verify_markers"] = re.findall(r"\[VERIFY:[^\]]*\]", d["post"])
+    d["news_used"] = bool(news) and d.get("news_used", False)
+    if d["news_used"]:
+        d["post"] = d["post"].rstrip() + "\n\n" + verify_flag(news)     # B1-2: every news draft carries the flag
+    d["verify_markers"] = re.findall(r"\[VERIFY[^\]]*\]", d["post"])
     return d

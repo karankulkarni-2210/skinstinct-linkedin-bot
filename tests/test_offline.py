@@ -27,6 +27,14 @@ GOOD = ("Batch fourteen came back with its pH down by about 0.4 and it's enough 
         "I think you'd notice it, and that's why we're holding it back this week. " * 12).strip()
 
 
+RSS = b"""<?xml version="1.0"?><rss><channel><title>t</title>
+<item><title>Regulator tightens cosmetic preservative rules - Example Times</title>
+<link>https://news.google.com/rss/articles/abc</link><pubDate>Mon, 21 Sep 2026 08:00:00 GMT</pubDate>
+<description>&lt;a href="x"&gt;New labelling rules for preservatives take effect in 2027&lt;/a&gt;</description>
+<source url="https://example.com">Example Times</source></item></channel></rss>"""
+RSS_EMPTY = b"""<?xml version="1.0"?><rss><channel><title>t</title></channel></rss>"""
+
+
 class Fake:
     """In-memory stand-in for PostgREST, the Telegram Bot API and Gemini."""
 
@@ -38,6 +46,8 @@ class Fake:
         self.blocked = set()
         self.no_news = False
         self.last_user = ""
+        self.news_queries = []
+        self.use_news = True
 
     # ---- routing
     def request(self, method, url, body=None, headers=None, timeout=60, raw=False):
@@ -45,6 +55,9 @@ class Fake:
             return self.telegram(url, body or {}, raw)
         if "googleapis.com" in url:
             return self.gemini(url, body)
+        if "news.google.com" in url:
+            self.news_queries.append(url)
+            return RSS_EMPTY if self.no_news else RSS
         return self.db(method, url, body, headers or {})
 
     # ---- telegram
@@ -67,21 +80,16 @@ class Fake:
         user = body["contents"][0]["parts"][0]["text"]
         if user.startswith("NOTE FROM MEERA"):
             self.last_user = user                 # what the drafter was given
-        if body.get("tools"):                     # news search with Google grounding
-            if self.no_news:
-                return {"candidates": [{"content": {"parts": [{"text": "<none/>"}]}}]}
-            text = ("<keywords>pH drift, preservative blend</keywords><matched>preservative blend</matched>"
-                    "<headline>Regulator tightens cosmetic preservative rules</headline><source>Example Times</source>"
-                    "<date>September 2026</date><fact>New labelling rules take effect in 2027.</fact><link>same topic</link>")
-            return {"candidates": [{"content": {"parts": [{"text": text}]},
-                                    "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://example.com/a", "title": "example.com"}}]}}]}
         if body["generationConfig"].get("responseMimeType") == "application/json":
-            text = json.dumps({"verdict": "develop", "score": 8, "pillar": "Formulation Science",
-                               "angle": "mid-batch sampling catches drift", "hook": "batch 14", "reason": "specific",
-                               "needs_from_meera": [], "keywords": ["pH drift", "preservative blend", "CoA"],
-                               "hard_reject": None})
+            text = json.dumps({"score": 8, "reason": "Specific batch incident with a clear lesson.",
+                               "pillar": "Formulation Science", "angle": "mid-batch sampling catches drift",
+                               "hook": "batch 14", "needs_from_meera": [],
+                               "keywords": ["pH drift", "preservative blend", "certificate of analysis"],
+                               "search_phrase": "cosmetic preservative change pH", "hard_reject": None})
         else:
-            text = f"<post>{GOOD}</post><verify>none</verify><hook_idea>none</hook_idea><why>strong</why>"
+            used = "yes" if ("NEWS ITEM" in user and self.use_news) else "no"
+            text = (f"<post>{GOOD}</post><verify>none</verify><hook_idea>none</hook_idea>"
+                    f"<news_used>{used}</news_used><why>strong</why>")
         return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
 
     # ---- postgrest (just the subset _store uses)
@@ -169,13 +177,14 @@ def test_lint_us_spelling_and_length():
 def test_parse_draft_and_json():
     d = brain.parse_draft("<post>\nHi.\n</post><verify>\n- confirm batch pH\n</verify><hook_idea>none</hook_idea><why>w</why>")
     assert d["post"] == "Hi." and d["verify"] == ["confirm batch pH"] and d["hook_idea"] == ""
-    assert brain.parse_json("garbage")["verdict"] == "hold"
+    assert brain.parse_json("garbage")["score"] == 0
     assert brain.parse_json('x {"verdict":"develop","score":8} y')["score"] == 8
 
 
 def test_hard_reject_overrides(monkeypatch):
-    monkeypatch.setattr(brain, "_call", lambda *a, **k: '{"verdict":"develop","score":9,"hard_reject":"names a customer"}')
-    assert brain.triage("x")["verdict"] == "reject"
+    monkeypatch.setattr(brain, "_call", lambda *a, **k: '{"score":9,"hard_reject":"names a customer"}')
+    t = brain.triage("x")
+    assert t["verdict"] == "reject" and t["score"] <= 3
 
 
 def test_repair_pass(monkeypatch):
@@ -188,7 +197,7 @@ def test_repair_pass(monkeypatch):
         return f"<post>{GOOD} Amazing!</post><verify>none</verify><hook_idea>none</hook_idea><why>w</why>"
 
     monkeypatch.setattr(brain, "_call", fake_call)
-    d = brain.make_draft("note", {})
+    d = brain.make_draft("note", {}, find_news=False)
     assert len(calls) == 2 and d["lint"] == []
 
 
@@ -227,14 +236,14 @@ def test_channel_note_to_approved_post(fake):
     # a note worth a post is drafted straight away - no /draft needed
     assert "Drafting it now" in texts(fake)[0]
     assert len(fake.tables["drafts"]) == 1 and fake.tables["drafts"][0]["status"] == "pending"
-    assert texts(fake)[-2] == GOOD                       # the post itself, alone, easy to copy
+    assert texts(fake)[-2].startswith(GOOD)              # the post itself, alone, easy to copy
     assert "inline_keyboard" in fake.sent[-1]["reply_markup"]
 
     bot.handle_update({"update_id": 3, "callback_query": {"id": "c", "from": {"id": 42}, "data": "approve:1",
                                                           "message": {"chat": {"id": 42}, "message_id": 9}}})
     assert fake.tables["drafts"][0]["status"] == "approved"
     assert fake.tables["notes"][0]["status"] == "used"
-    assert texts(fake)[-1] == GOOD
+    assert texts(fake)[-1].startswith(GOOD) and "[VERIFY NEWS:" in texts(fake)[-1]
 
 
 def test_channel_note_answered_in_channel_even_if_owner_never_pressed_start(fake):
@@ -242,7 +251,7 @@ def test_channel_note_answered_in_channel_even_if_owner_never_pressed_start(fake
     bot.handle_update({"update_id": 50, "channel_post": {"message_id": 5, "chat": {"id": -1001, "title": "notes"},
                                                          "text": "Batch fourteen pH drift at mid-run sampling"}})
     assert len(fake.tables["drafts"]) == 1
-    assert all(m["chat_id"] == -1001 for m in fake.sent) and GOOD in texts(fake)
+    assert all(m["chat_id"] == -1001 for m in fake.sent) and any(t.startswith(GOOD) for t in texts(fake))
     # Redraft pressed in the channel, feedback posted in the channel
     bot.handle_update({"update_id": 51, "callback_query": {"id": "c", "from": {"id": 42}, "data": "redraft:1",
                                                            "message": {"chat": {"id": -1001, "type": "channel"}, "message_id": 9}}})
@@ -258,27 +267,38 @@ def test_dm_falls_back_to_channel(fake):
     assert fake.sent[-1]["chat_id"] == -1001
 
 
-def test_news_angle_and_keywords_reach_draft_and_meera(fake):
+def test_news_item_used_gets_verify_flag_and_is_shown(fake):
+    bot.capture("Batch fourteen pH drift after the supplier changed the preservative blend", "channel")
+    assert "cosmetic%20preservative%20change%20pH" in fake.news_queries[0]      # searched with the note's phrase
+    assert "NEWS ITEM" in fake.last_user and "Example Times" in fake.last_user    # given to the drafter
+    assert "genuinely relevant" in fake.last_user and "ignore it" in fake.last_user
+    d = fake.tables["drafts"][0]
+    assert d["body"].rstrip().endswith("https://news.google.com/rss/articles/abc]")   # verify flag at the end
+    assert "[VERIFY NEWS:" in d["body"] and d["meta"]["news"]["source"] == "Example Times"
+    checks = texts(fake)[-1]
+    assert "Keywords from your note: pH drift, preservative blend, certificate of analysis" in checks
+    assert "News used (Google News" in checks
+
+
+def test_news_ignored_when_it_doesnt_fit(fake):
+    fake.use_news = False
     bot.capture("Batch fourteen pH drift after the supplier changed the preservative blend", "channel")
     d = fake.tables["drafts"][0]
-    assert d["meta"]["news"]["headline"].startswith("Regulator")
-    assert "NEWS ANGLE" in fake.last_user and "Example Times" in fake.last_user   # given to the drafter
-    checks = texts(fake)[-1]
-    assert "Keywords from your note: pH drift, preservative blend" in checks
-    assert "Matches your keywords: preservative blend" in checks and "https://example.com/a" in checks
+    assert "[VERIFY NEWS:" not in d["body"] and "News found but not used" in texts(fake)[-1]
 
 
-def test_no_news_when_search_finds_nothing(fake):
+def test_no_news_when_google_news_is_empty(fake):
     fake.no_news = True
     bot.capture("Batch fourteen pH drift after the supplier changed the preservative blend", "channel")
     assert fake.tables["drafts"][0]["meta"]["news"] is None
-    assert "nothing recent and relevant" in texts(fake)[-1]
-    assert "NEWS ANGLE" not in fake.last_user
+    assert len(fake.news_queries) >= 2                          # retried with fewer keywords
+    assert "no Google News result" in texts(fake)[-1] and "NEWS ITEM" not in fake.last_user
 
 
-def test_news_without_grounding_is_discarded(monkeypatch):
-    monkeypatch.setattr(brain, "_call", lambda *a, **k: ("<headline>Made up</headline><source>x</source>", {}))
-    assert brain.news_angle("note", {}) is None
+def test_fetch_news_parses_top_result(fake):
+    n = brain.fetch_news("cosmetic preservative change")
+    assert n["headline"] == "Regulator tightens cosmetic preservative rules" and n["source"] == "Example Times"
+    assert n["summary"].startswith("New labelling rules") and n["url"].startswith("https://news.google.com")
 
 
 def test_lint_flags_formal_and_copied_text():
@@ -334,14 +354,18 @@ def test_scheduled_run_respects_days_and_pending_limit(fake, monkeypatch):
     assert bot.scheduled_run(mon)["draft"] == "skipped: pending"
 
 
-def test_hold_and_reject_explain_without_drafting(fake, monkeypatch):
-    monkeypatch.setattr(brain, "triage", lambda text: {"verdict": "hold", "score": 6, "pillar": None,
-                                                         "needs_from_meera": ["the batch number"], "reason": "r"})
-    bot.capture("A note that needs a fact", "channel")
-    assert fake.tables["drafts"] == [] and "the batch number" in texts(fake)[-1]
-    monkeypatch.setattr(brain, "triage", lambda text: {"verdict": "reject", "score": 1, "reason": "just a mood"})
-    bot.capture("tired. long day today", "channel")
-    assert fake.tables["drafts"] == [] and "just a mood" in texts(fake)[-1]
+def test_score_threshold_decides(monkeypatch):
+    for score, verdict in ((6, "develop"), (5, "reject"), (9, "develop"), (0, "reject")):
+        monkeypatch.setattr(brain, "_call", lambda *a, _s=score, **k: json.dumps({"score": _s, "reason": "r"}))
+        assert brain.triage("x")["verdict"] == verdict, score
+
+
+def test_low_score_note_gets_reason_and_no_draft(fake, monkeypatch):
+    monkeypatch.setattr(brain, "triage", lambda text: {"verdict": "reject", "score": 1,
+                                                         "reason": "A task reminder, not an idea."})
+    bot.capture("call supplier re: invoice tmrw", "channel")
+    assert fake.tables["drafts"] == []
+    assert "No draft for note #1 - it scored 1/10. A task reminder, not an idea." in texts(fake)[-1]
 
 
 def test_import_file_batches_triage(fake):

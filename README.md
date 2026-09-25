@@ -12,8 +12,8 @@ all parameters, the Cut, and live counts.
 ```
 Telegram channel post ──> /api/telegram (webhook) ──> Supabase: store + de-dupe
                                    │
-                                   ├─ Gemini: triage 0-10 → develop / hold / reject
-                                   ├─ develop → keywords → Gemini + Google Search: news angle (B1)
+                                   ├─ Gemini: score 0-10 + reason + keywords (B1-1)
+                                   ├─ <6 → one-line reason back, stop | 6+ → Google News top result (B1-2)
                                    │          → drafted immediately (AUTO_DRAFT=true)
                                    │
 Vercel Cron (daily, 08:30 IST) ─> /api/cron ─> Mon/Wed/Fri: best backlog note → Gemini draft
@@ -52,5 +52,5 @@ Schema: `supabase/schema.sql`.
 ## Tests
 
 ```bash
-python -m pytest -q     # 24 offline tests; Telegram, Supabase and Gemini are faked
+python -m pytest -q     # 27 offline tests; Telegram, Supabase and Gemini are faked
 ```

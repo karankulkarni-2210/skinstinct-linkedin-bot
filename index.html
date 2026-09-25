@@ -98,8 +98,8 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
   <div class="card"><h3>Input</h3><p>The raw note: an observation, a customer DM reaction, a 2-liner, a pasted voice transcript, or a bulk .txt backlog.</p></div>
   <div class="card"><h3>Context</h3><p><code>voice-skill.txt</code> (rules, signature moves, published facts) plus all 15 of her pieces in full: 4 LinkedIn posts and 11 newsletters.</p></div>
   <div class="card"><h3>Processing</h3><p>Stores and de-duplicates every note, pulls 3-6 keywords from it, ranks the backlog, varies topics, and runs a rule-based voice check (contractions, copying, hype words, length).</p></div>
-  <div class="card"><h3>AI</h3><p>Gemini, three jobs: score the note, search Google for a current news angle using the note's keywords, and write the draft (plus one repair pass if the voice check fails).</p></div>
-  <div class="card"><h3>Output</h3><p>The draft, the keywords, the news source link and anything to verify, with Approve / Redraft / Later / Skip. <strong>Human review gate:</strong> she posts it herself.</p></div>
+  <div class="card"><h3>AI</h3><p>Gemini scores the note (0-10, one-line reason) and pulls 3-5 keywords and a search phrase. The top Google News result for that phrase (no key needed) goes to Gemini with the note and the voice skill to write the draft.</p></div>
+  <div class="card"><h3>Output</h3><p>Score below 6: a one-line reason and no draft. Score 6+: the draft, the keywords and the news source, with a <code>[VERIFY NEWS]</code> flag if news was used, plus Approve / Redraft / Later / Skip. <strong>Human review gate:</strong> she posts it herself.</p></div>
 </div>
 
 <h2>The Nine Checks</h2>
@@ -131,10 +131,10 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 
 <h3 style="margin-top:22px">2. Verdict thresholds</h3>
 <div class="tablewrap"><table>
-<tr><th>Verdict</th><th>Rule</th><th>What happens</th></tr>
-<tr><td><span class="pill go">develop</span></td><td>Score 6 or more, no hard reject</td><td>Drafted immediately and sent for review</td></tr>
-<tr><td><span class="pill hold">hold</span></td><td>A real idea, but it needs a fact only Meera has</td><td>The bot lists what it needs; she can force a draft with <code>/draft &lt;id&gt;</code></td></tr>
-<tr><td><span class="pill no">reject</span></td><td>Score under 4, or any hard reject</td><td>Never drafted</td></tr>
+<tr><th>Score</th><th>Examples</th><th>What happens</th></tr>
+<tr><td><span class="pill go">6-10</span></td><td>A specific batch, test, customer question or number, with an idea a reader learns from</td><td>Drafted immediately and sent for review</td></tr>
+<tr><td><span class="pill hold">4-5</span></td><td>A real topic, but generic - no detail from her own work</td><td>No draft; one-line reason sent back. <code>/draft &lt;id&gt;</code> overrides</td></tr>
+<tr><td><span class="pill no">0-3</span></td><td>Task reminders, logistics, moods, abandoned half-thoughts, sales pushes, any hard reject</td><td>No draft; one-line reason sent back</td></tr>
 </table></div>
 
 <div class="two" style="margin-top:14px">
@@ -147,7 +147,7 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
     <li>Confidential commercial terms (pricing, margins, contracts)</li>
   </ul></div>
   <div class="card"><h3>Cadence and workload</h3><ul>
-    <li>A note scoring 6 or more is <strong>drafted straight away</strong>; hold and reject verdicts come back with the reason</li>
+    <li>A note scoring 6 or more is <strong>drafted straight away</strong>; below 6 gets a one-line reason and no draft</li>
     <li>Mon, Wed, Fri mornings (IST): the best note still waiting in the backlog is drafted, so she gets 3 a week even from old notes</li>
     <li>On demand at any time with <code>/draft</code></li>
     <li>No new draft while <strong>3</strong> are still waiting for review</li>
@@ -171,7 +171,7 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 <tr><td>Banned</td><td>Emoji, hashtags, "!", em dashes, glow / holy grail / game-changer / skin-loving / miracle / unlock / journey, medical verbs</td><td>Code</td></tr>
 <tr><td>Spelling</td><td>British/Indian (moisturiser, oxidise, colour, optimise)</td><td>Code</td></tr>
 <tr><td>Facts</td><td>Only from the note, her published facts or the sourced news angle. Anything else becomes <code>[VERIFY: ...]</code></td><td>Prompt, and flagged on approval</td></tr>
-<tr><td>News angle</td><td>One real item from the last 6 months found with Google Search on the note's keywords; at most two sentences, attributed by name; dropped if search can't show a source</td><td>Gemini + grounding check in code</td></tr>
+<tr><td>News angle</td><td>Top Google News result for the note's search phrase (retries with fewer keywords). Used only if genuinely relevant - otherwise ignored. Any draft that uses it ends with a <code>[VERIFY NEWS: headline, source, date, link]</code> flag</td><td>Gemini decides fit; flag added in code</td></tr>
 </table></div>
 
 <h3 style="margin-top:22px">4. How we'll know it works</h3>
@@ -193,7 +193,7 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 <h2>What gets built</h2>
 <div class="two">
   <div class="card"><h3>By end of L3</h3><p>Meera sends a note to her Telegram bot (or her notes channel). A draft in her voice comes back. <span class="pill go">Live</span></p></div>
-  <div class="card"><h3>By end of B1</h3><p>The pipeline screens notes before drafting, adds a sourced news angle found from the note's keywords, and stores everything in the database for Meera to approve. <span class="pill go">Live</span></p></div>
+  <div class="card"><h3>By end of B1</h3><p>The pipeline screens notes before drafting, adds a Google News angle found from the note's keywords (flagged for her to verify), and stores everything in the database for Meera to approve. <span class="pill go">Live</span></p></div>
 </div>
 
 <h2>Using the bot</h2>

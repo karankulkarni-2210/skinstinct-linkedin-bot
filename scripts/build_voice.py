@@ -1,9 +1,10 @@
-"""Regenerate api/_voice.py from voice/*.md (Vercel bundles .py files reliably, so the voice lives in Python)."""
+"""Prints what the bot will load as Meera's voice. The voice is read at runtime from voice/, so there
+is nothing to build - edit voice/voice-skill.txt, voice/exemplars.md or voice/newsletters.md directly."""
+import sys
 from pathlib import Path
-root = Path(__file__).resolve().parent.parent
-g = (root / "voice/voice_guide.md").read_text(encoding="utf-8")
-e = (root / "voice/exemplars.md").read_text(encoding="utf-8")
-(root / "api/_voice.py").write_text(
-    '"""Meera\'s voice reference. Generated from voice/*.md - edit those, then run: python scripts/build_voice.py"""\n'
-    f"VOICE_GUIDE = {g!r}\n\nEXEMPLARS = {e!r}\n", encoding="utf-8")
-print("api/_voice.py rebuilt")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
+import _voice  # noqa: E402
+
+for name in ("VOICE_GUIDE", "LINKEDIN_POSTS", "NEWSLETTERS"):
+    print(f"{name}: {len(getattr(_voice, name)):,} characters")

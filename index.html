@@ -94,13 +94,28 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 <h2>Components map</h2>
 <p class="sub">Trigger → Input → Context → Processing → AI → Output.</p>
 <div class="flow">
-  <div class="card"><h3>Trigger</h3><p>A new post in her notes channel (or a DM to the bot). Plus a daily run that drafts on Mon, Wed and Fri.</p></div>
+  <div class="card"><h3>Trigger</h3><p>A new post in her notes channel (or a DM to the bot). A note worth a post is drafted within about a minute. A daily run also sweeps the backlog on Mon, Wed and Fri.</p></div>
   <div class="card"><h3>Input</h3><p>The raw note: an observation, a customer DM reaction, a 2-liner, a pasted voice transcript, or a bulk .txt backlog.</p></div>
-  <div class="card"><h3>Context</h3><p>Her 4 LinkedIn posts in full, a voice guide drawn from all 15 published pieces, and the list of facts she has already made public.</p></div>
-  <div class="card"><h3>Processing</h3><p>Stores and de-duplicates notes, ranks the backlog, varies the topic from one post to the next, caps unreviewed drafts, and runs a rule-based voice check.</p></div>
-  <div class="card"><h3>AI</h3><p>Gemini, used twice: once to score and triage each note, once to write the draft (plus one repair pass if the voice check fails).</p></div>
-  <div class="card"><h3>Output</h3><p>A draft in her Telegram DM with Approve / Redraft / Later / Skip. Anything to fact-check is flagged as <code>[VERIFY]</code>. She posts it herself.</p></div>
+  <div class="card"><h3>Context</h3><p><code>voice-skill.txt</code> (rules, signature moves, published facts) plus all 15 of her pieces in full: 4 LinkedIn posts and 11 newsletters.</p></div>
+  <div class="card"><h3>Processing</h3><p>Stores and de-duplicates every note, pulls 3-6 keywords from it, ranks the backlog, varies topics, and runs a rule-based voice check (contractions, copying, hype words, length).</p></div>
+  <div class="card"><h3>AI</h3><p>Gemini, three jobs: score the note, search Google for a current news angle using the note's keywords, and write the draft (plus one repair pass if the voice check fails).</p></div>
+  <div class="card"><h3>Output</h3><p>The draft, the keywords, the news source link and anything to verify, with Approve / Redraft / Later / Skip. <strong>Human review gate:</strong> she posts it herself.</p></div>
 </div>
+
+<h2>The Nine Checks</h2>
+<p class="sub">Does this automation deserve to be built? Kill switches: any No means don't build. Sizing: any No means build smaller. Boundary: any No means a human stays exactly there.</p>
+<div class="tablewrap"><table>
+<tr><th>Check</th><th>Answer</th><th>Evidence from the case</th></tr>
+<tr><td>01 Problem real</td><td><span class="pill go">Yes</span></td><td>60 unused notes, 40 abandoned drafts, 11 weeks without a post. Her last post drove 340 profile visits and 3 wholesale enquiries.</td></tr>
+<tr><td>02 Workflow repeated</td><td><span class="pill go">Yes</span></td><td>2-3 notes a week for 8 months; the same failure loop across 40 drafts.</td></tr>
+<tr><td>03 Input available</td><td><span class="pill go">Yes</span></td><td>Telegram is already her habit. 60 note fragments. 15 published pieces for the voice.</td></tr>
+<tr><td>04 Output valuable</td><td><span class="pill go">Yes</span></td><td>47,000 impressions from 4 posts. One post brought 3 wholesale enquiries.</td></tr>
+<tr><td>05 Impact measurable</td><td><span class="pill go">Yes</span></td><td>Baseline about 0.5 posts a month; target 3 a week. Stall time 90-180 minutes a post.</td></tr>
+<tr><td>06 ROI worth it</td><td><span class="pill go">Yes</span></td><td>3 wholesale enquiries from one post is significant revenue; the build removes hours of weekly stall time.</td></tr>
+<tr><td>07 Failure risk OK</td><td><span class="pill go">Yes</span></td><td>Nothing reaches LinkedIn without her approval. Worst case: a bad draft she rejects.</td></tr>
+<tr><td>08 Judgment protected</td><td><span class="pill go">Yes</span></td><td>She decides what's published and edits every draft. The bot flags facts and news for her to check.</td></tr>
+<tr><td>09 Owner clear</td><td><span class="pill go">Yes</span></td><td>Meera reviews, edits and publishes herself.</td></tr>
+</table></div>
 
 <h2>Parameters</h2>
 <p class="sub">Every setting is written down so it can be defended and changed.</p>
@@ -117,7 +132,7 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 <h3 style="margin-top:22px">2. Verdict thresholds</h3>
 <div class="tablewrap"><table>
 <tr><th>Verdict</th><th>Rule</th><th>What happens</th></tr>
-<tr><td><span class="pill go">develop</span></td><td>Score 6 or more, no hard reject</td><td>Joins the backlog, best first</td></tr>
+<tr><td><span class="pill go">develop</span></td><td>Score 6 or more, no hard reject</td><td>Drafted immediately and sent for review</td></tr>
 <tr><td><span class="pill hold">hold</span></td><td>A real idea, but it needs a fact only Meera has</td><td>The bot lists what it needs; she can force a draft with <code>/draft &lt;id&gt;</code></td></tr>
 <tr><td><span class="pill no">reject</span></td><td>Score under 4, or any hard reject</td><td>Never drafted</td></tr>
 </table></div>
@@ -132,7 +147,8 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
     <li>Confidential commercial terms (pricing, margins, contracts)</li>
   </ul></div>
   <div class="card"><h3>Cadence and workload</h3><ul>
-    <li>Drafts on <strong>Mon, Wed, Fri</strong> in the morning (IST), which meets her 3 a week</li>
+    <li>A note scoring 6 or more is <strong>drafted straight away</strong>; hold and reject verdicts come back with the reason</li>
+    <li>Mon, Wed, Fri mornings (IST): the best note still waiting in the backlog is drafted, so she gets 3 a week even from old notes</li>
     <li>On demand at any time with <code>/draft</code></li>
     <li>No new draft while <strong>3</strong> are still waiting for review</li>
     <li>Rotates topics: skips a pillar just used if another note is within 1 point</li>
@@ -143,6 +159,10 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 <h3 style="margin-top:22px">3. Voice rules (from her 15 published pieces)</h3>
 <div class="tablewrap"><table>
 <tr><th>Rule</th><th>Setting</th><th>Checked by</th></tr>
+<tr><td>Contractions</td><td>About 4 contractions for every spelled-out form, as in her 15 pieces (it's, doesn't, I'm)</td><td>Code + prompt</td></tr>
+<tr><td>Her own words</td><td>Keep the note's sharpest phrases and her hedges ("I think") - never upgrade her certainty</td><td>Prompt</td></tr>
+<tr><td>Mechanism</td><td>Explain why the cause produces the effect, in one causal chain</td><td>Prompt</td></tr>
+<tr><td>No copying</td><td>No 9-word run lifted from her published pieces</td><td>Code</td></tr>
 <tr><td>Length</td><td>1,600-2,800 characters, never over 3,000 (LinkedIn's limit)</td><td>Code</td></tr>
 <tr><td>Opening</td><td>A concrete scene, number, or claim about the reader's own product. Never a question</td><td>Prompt</td></tr>
 <tr><td>Structure</td><td>5-9 paragraphs of prose. No headers, bullets or numbered lists</td><td>Code + prompt</td></tr>
@@ -150,7 +170,8 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 <tr><td>Ending</td><td>A practical step for the reader or a flat statement. Never "Thoughts?"</td><td>Code + prompt</td></tr>
 <tr><td>Banned</td><td>Emoji, hashtags, "!", em dashes, glow / holy grail / game-changer / skin-loving / miracle / unlock / journey, medical verbs</td><td>Code</td></tr>
 <tr><td>Spelling</td><td>British/Indian (moisturiser, oxidise, colour, optimise)</td><td>Code</td></tr>
-<tr><td>Facts</td><td>Only from the note or her published facts. Anything else becomes <code>[VERIFY: ...]</code></td><td>Prompt, and flagged on approval</td></tr>
+<tr><td>Facts</td><td>Only from the note, her published facts or the sourced news angle. Anything else becomes <code>[VERIFY: ...]</code></td><td>Prompt, and flagged on approval</td></tr>
+<tr><td>News angle</td><td>One real item from the last 6 months found with Google Search on the note's keywords; at most two sentences, attributed by name; dropped if search can't show a source</td><td>Gemini + grounding check in code</td></tr>
 </table></div>
 
 <h3 style="margin-top:22px">4. How we'll know it works</h3>
@@ -164,9 +185,15 @@ footer{margin-top:64px;color:var(--muted);font-size:13px;border-top:1px solid va
 
 <h2>The Cut</h2>
 <div class="cut">
-  <h3>Not built: automatic news hooks and current industry data points</h3>
-  <p>Meera asked for drafts that "reference something current". We didn't build that. Her authority comes from claims she can back up, and a pulled-in statistic she hasn't checked is the kind of unsupported claim she criticises other brands for making. Instead, the draft marks what needs checking with <code>[VERIFY]</code> and may suggest a current angle for her to look up herself.</p>
-  <p style="margin:0">Also left out on purpose: posting to LinkedIn (she turned down two tools that did everything end to end), voice-note transcription, and anything that changes her habit of dropping notes into Telegram.</p>
+  <h3>Meera stays the author of everything published</h3>
+  <p><strong>Automated:</strong> capture, scoring, drafting, news research. <strong>Stays human:</strong> review, edit, publish.</p>
+  <p>The insight isn't "don't automate". It's: automate the workflow without automating away the human's consequential judgment. So the bot never posts, schedules or auto-publishes to LinkedIn. Every draft stops at the human review gate: Meera approves and publishes it herself. The news angle comes with its source link so she checks it before it goes out under her name.</p>
+</div>
+
+<h2>What gets built</h2>
+<div class="two">
+  <div class="card"><h3>By end of L3</h3><p>Meera sends a note to her Telegram bot (or her notes channel). A draft in her voice comes back. <span class="pill go">Live</span></p></div>
+  <div class="card"><h3>By end of B1</h3><p>The pipeline screens notes before drafting, adds a sourced news angle found from the note's keywords, and stores everything in the database for Meera to approve. <span class="pill go">Live</span></p></div>
 </div>
 
 <h2>Using the bot</h2>

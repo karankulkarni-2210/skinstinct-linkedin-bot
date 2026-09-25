@@ -8,6 +8,7 @@ import os
 from _web import Base, secret_ok
 
 import _brain
+import _voice
 import _store
 import _tg
 
@@ -33,6 +34,8 @@ class handler(Base):
             "webhook": check(lambda: {k: v for k, v in _tg.call("getWebhookInfo").items()
                                       if k in ("url", "pending_update_count", "last_error_message")}),
             "database": check(lambda: _store.counts()),
+            "voice_skill": check(lambda: {"voice-skill.txt": len(_voice.VOICE_GUIDE), "linkedin_posts": len(_voice.LINKEDIN_POSTS),
+                                          "newsletters": len(_voice.NEWSLETTERS)}),
             "gemini": check(lambda: {"reply": _brain._call("Reply with exactly: ok", "ping", 50).strip()[:40],
                                      "model": _brain.active_model(), "endpoint": _brain._endpoint}),
         }

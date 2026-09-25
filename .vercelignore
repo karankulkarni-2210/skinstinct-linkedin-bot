@@ -1,6 +1,7 @@
 tests/
 scripts/
 notes/
-voice/
 *.md
 !README.md
+!voice/
+!voice/*.md

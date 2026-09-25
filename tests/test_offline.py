@@ -23,8 +23,8 @@ import _http  # noqa: E402
 import _store as store  # noqa: E402
 import _tg as tg  # noqa: E402
 
-GOOD = ("The niacinamide serum you're using probably has the ingredient listed at 5% on the label. "
-        "That number is almost certainly meaningless without knowing the pH. " * 12).strip()
+GOOD = ("Batch fourteen came back with its pH down by about 0.4 and it's enough to shift the texture. "
+        "I think you'd notice it, and that's why we're holding it back this week. " * 12).strip()
 
 
 class Fake:
@@ -35,6 +35,9 @@ class Fake:
         self.ids = {"notes": 0, "drafts": 0}
         self.sent = []
         self.gemini_calls = []
+        self.blocked = set()
+        self.no_news = False
+        self.last_user = ""
 
     # ---- routing
     def request(self, method, url, body=None, headers=None, timeout=60, raw=False):
@@ -46,6 +49,8 @@ class Fake:
 
     # ---- telegram
     def telegram(self, url, body, raw):
+        if body.get("chat_id") in self.blocked:
+            raise _http.HttpError(400, '{"description":"Bad Request: PEER_ID_INVALID"}', url)
         if raw:
             return "note one about pH drift in batch fourteen\n---\nnote two about fragrance in sensitive skin products".encode()
         m = url.rsplit("/", 1)[1]
@@ -59,10 +64,22 @@ class Fake:
     def gemini(self, url, body):
         system = body["systemInstruction"]["parts"][0]["text"]
         self.gemini_calls.append(system[:40])
+        user = body["contents"][0]["parts"][0]["text"]
+        if user.startswith("NOTE FROM MEERA"):
+            self.last_user = user                 # what the drafter was given
+        if body.get("tools"):                     # news search with Google grounding
+            if self.no_news:
+                return {"candidates": [{"content": {"parts": [{"text": "<none/>"}]}}]}
+            text = ("<keywords>pH drift, preservative blend</keywords><matched>preservative blend</matched>"
+                    "<headline>Regulator tightens cosmetic preservative rules</headline><source>Example Times</source>"
+                    "<date>September 2026</date><fact>New labelling rules take effect in 2027.</fact><link>same topic</link>")
+            return {"candidates": [{"content": {"parts": [{"text": text}]},
+                                    "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://example.com/a", "title": "example.com"}}]}}]}
         if body["generationConfig"].get("responseMimeType") == "application/json":
             text = json.dumps({"verdict": "develop", "score": 8, "pillar": "Formulation Science",
                                "angle": "mid-batch sampling catches drift", "hook": "batch 14", "reason": "specific",
-                               "needs_from_meera": [], "hard_reject": None})
+                               "needs_from_meera": [], "keywords": ["pH drift", "preservative blend", "CoA"],
+                               "hard_reject": None})
         else:
             text = f"<post>{GOOD}</post><verify>none</verify><hook_idea>none</hook_idea><why>strong</why>"
         return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
@@ -207,11 +224,9 @@ def test_gemini_switches_to_vertex_for_express_keys(monkeypatch, fake):
 def test_channel_note_to_approved_post(fake):
     bot.handle_update({"update_id": 1, "channel_post": {"message_id": 5, "chat": {"id": -1001, "title": "notes"},
                                                         "text": "Factory today: batch 14 pH drift mid-run"}})
-    assert fake.tables["notes"][0]["status"] == "develop"
-    assert "worth a post" in texts(fake)[-1]
-
-    bot.handle_update({"update_id": 2, "message": {"chat": {"id": 42, "type": "private"}, "text": "/draft"}})
-    assert fake.tables["drafts"][0]["status"] == "pending"
+    # a note worth a post is drafted straight away - no /draft needed
+    assert "Drafting it now" in texts(fake)[0]
+    assert len(fake.tables["drafts"]) == 1 and fake.tables["drafts"][0]["status"] == "pending"
     assert texts(fake)[-2] == GOOD                       # the post itself, alone, easy to copy
     assert "inline_keyboard" in fake.sent[-1]["reply_markup"]
 
@@ -222,9 +237,71 @@ def test_channel_note_to_approved_post(fake):
     assert texts(fake)[-1] == GOOD
 
 
+def test_channel_note_answered_in_channel_even_if_owner_never_pressed_start(fake):
+    fake.blocked.add(42)                     # owner never pressed Start: DMs are refused
+    bot.handle_update({"update_id": 50, "channel_post": {"message_id": 5, "chat": {"id": -1001, "title": "notes"},
+                                                         "text": "Batch fourteen pH drift at mid-run sampling"}})
+    assert len(fake.tables["drafts"]) == 1
+    assert all(m["chat_id"] == -1001 for m in fake.sent) and GOOD in texts(fake)
+    # Redraft pressed in the channel, feedback posted in the channel
+    bot.handle_update({"update_id": 51, "callback_query": {"id": "c", "from": {"id": 42}, "data": "redraft:1",
+                                                           "message": {"chat": {"id": -1001, "type": "channel"}, "message_id": 9}}})
+    bot.handle_update({"update_id": 52, "channel_post": {"message_id": 6, "chat": {"id": -1001}, "text": "make it shorter please"}})
+    assert [d["status"] for d in fake.tables["drafts"]] == ["superseded", "pending"]
+    assert len(fake.tables["notes"]) == 1    # the feedback was not stored as a new note
+
+
+def test_dm_falls_back_to_channel(fake):
+    fake.blocked.add(42)
+    bot._reply_to = None
+    bot.say("hello")
+    assert fake.sent[-1]["chat_id"] == -1001
+
+
+def test_news_angle_and_keywords_reach_draft_and_meera(fake):
+    bot.capture("Batch fourteen pH drift after the supplier changed the preservative blend", "channel")
+    d = fake.tables["drafts"][0]
+    assert d["meta"]["news"]["headline"].startswith("Regulator")
+    assert "NEWS ANGLE" in fake.last_user and "Example Times" in fake.last_user   # given to the drafter
+    checks = texts(fake)[-1]
+    assert "Keywords from your note: pH drift, preservative blend" in checks
+    assert "Matches your keywords: preservative blend" in checks and "https://example.com/a" in checks
+
+
+def test_no_news_when_search_finds_nothing(fake):
+    fake.no_news = True
+    bot.capture("Batch fourteen pH drift after the supplier changed the preservative blend", "channel")
+    assert fake.tables["drafts"][0]["meta"]["news"] is None
+    assert "nothing recent and relevant" in texts(fake)[-1]
+    assert "NEWS ANGLE" not in fake.last_user
+
+
+def test_news_without_grounding_is_discarded(monkeypatch):
+    monkeypatch.setattr(brain, "_call", lambda *a, **k: ("<headline>Made up</headline><source>x</source>", {}))
+    assert brain.news_angle("note", {}) is None
+
+
+def test_lint_flags_formal_and_copied_text():
+    formal = ("It is true that it is not simple. I am sure we are not done and it does not help. " * 12)
+    assert any("Too formal" in p for p in brain.lint(formal))
+    copied = GOOD + " Most serums don't list their pH on the label. This is legal. It is also not helpful."
+    assert any("Copies a phrase" in p for p in brain.lint(copied))
+
+
+def test_generic_keywords_are_dropped():
+    kws = brain.clean_keywords(["ingredients", "Regulations", "preservative blend change", "finished product pH",
+                                "skincare", "a very long keyword phrase that goes on", "Finished product pH", "CDSCO"])
+    assert kws == ["preservative blend change", "finished product pH", "CDSCO"]
+
+
+def test_voice_files_load():
+    import _voice
+    assert "Contractions, always" in _voice.VOICE_GUIDE
+    assert "newsletter_011" in _voice.NEWSLETTERS and "linkedin_post_004" in _voice.LINKEDIN_POSTS
+
+
 def test_redraft_uses_feedback(fake):
-    bot.capture("A note about airless pumps and stability data", "dm")
-    bot.deliver_draft()
+    bot.capture("A note about airless pumps and stability data", "dm")   # auto-drafts draft #1
     bot.handle_update({"update_id": 9, "callback_query": {"id": "c", "from": {"id": 42}, "data": "redraft:1",
                                                           "message": {"chat": {"id": 42}, "message_id": 9}}})
     bot.handle_update({"update_id": 10, "message": {"chat": {"id": 42, "type": "private"}, "text": "shorter"}})
@@ -244,8 +321,9 @@ def test_duplicate_update_detected(fake):
     assert store.first_time_seeing(77) is False
 
 
-def test_scheduled_run_respects_days_and_pending_limit(fake):
+def test_scheduled_run_respects_days_and_pending_limit(fake, monkeypatch):
     import datetime as dt
+    monkeypatch.setattr(bot, "AUTO_DRAFT", False)
     tue = dt.datetime(2026, 9, 29, 9, tzinfo=bot.TZ)
     mon = dt.datetime(2026, 9, 28, 9, tzinfo=bot.TZ)
     bot.capture("Note one: pH drift across batch fourteen", "dm")
@@ -254,6 +332,16 @@ def test_scheduled_run_respects_days_and_pending_limit(fake):
     for i in range(3):
         fake.tables["drafts"].append({"id": 100 + i, "note_id": 1, "status": "pending", "body": "x", "meta": {}})
     assert bot.scheduled_run(mon)["draft"] == "skipped: pending"
+
+
+def test_hold_and_reject_explain_without_drafting(fake, monkeypatch):
+    monkeypatch.setattr(brain, "triage", lambda text: {"verdict": "hold", "score": 6, "pillar": None,
+                                                         "needs_from_meera": ["the batch number"], "reason": "r"})
+    bot.capture("A note that needs a fact", "channel")
+    assert fake.tables["drafts"] == [] and "the batch number" in texts(fake)[-1]
+    monkeypatch.setattr(brain, "triage", lambda text: {"verdict": "reject", "score": 1, "reason": "just a mood"})
+    bot.capture("tired. long day today", "channel")
+    assert fake.tables["drafts"] == [] and "just a mood" in texts(fake)[-1]
 
 
 def test_import_file_batches_triage(fake):

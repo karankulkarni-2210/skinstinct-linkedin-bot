@@ -122,8 +122,19 @@ def send_draft(draft_id, note, d):
         f"{len(d['post'])} chars\nWhy this note: {d.get('why') or t.get('reason', '')}")
     say(d["post"])
     checks = [f"- VERIFY: {v}" for v in d.get("verify", [])] + [f"- Style: {p}" for p in d.get("lint", [])]
+    kws = (d.get("news") or {}).get("keywords") or t.get("keywords") or []
+    if kws:
+        checks.append("- Keywords from your note: " + ", ".join(kws))
+    n = d.get("news")
+    if n:
+        checks.append(f"- News angle used: \"{n['headline']}\" - {n['source']}, {n['date']}\n"
+                      f"  Fact used: {n['fact']}\n"
+                      f"  Matches your keywords: {', '.join(n.get('matched') or []) or '-'}\n"
+                      f"  Check the source before posting: {n['urls'][0]}")
+    elif brain.NEWS_ANGLE:
+        checks.append("- News angle: nothing recent and relevant found for these keywords, so none was added.")
     if d.get("hook_idea"):
-        checks.append(f"- Optional current angle to look up yourself: {d['hook_idea']}")
+        checks.append(f"- Another angle you could look up: {d['hook_idea']}")
     say("Check before posting:\n" + ("\n".join(checks) if checks else "- Nothing flagged."), keyboard(draft_id))
 
 
@@ -140,7 +151,9 @@ def deliver_draft(note_id=None, scheduled=False, feedback=None, previous=None):
             "Drop a few more notes in the channel, or /backlog to see what's there.")
         return "skipped: empty"
     typing()
-    d = brain.make_draft(note["text"], note.get("triage"), feedback, previous["body"] if previous else None)
+    keep_news = ((previous or {}).get("meta") or {}).get("news") if previous else None
+    d = brain.make_draft(note["text"], note.get("triage"), feedback, previous["body"] if previous else None,
+                         news=keep_news)
     draft_id = store.add_draft(note["id"], d["post"], d, (previous["version"] + 1) if previous else 1)
     send_draft(draft_id, note, d)
     return f"drafted #{draft_id}"

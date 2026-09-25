@@ -10,16 +10,18 @@ stores data in Supabase, and talks to Telegram through a webhook. Read `README.m
 
 ## Rules that must not change
 - **Never post to LinkedIn.** Meera publishes herself. She turned down two tools that ran end to end.
-- **No automatic news hooks or outside statistics (the Cut).** Any fact that isn't in the note or
-  in "Facts she has already published" (`voice/voice_guide.md`) must appear as `[VERIFY: ...]`.
-  Never loosen `DRAFT_SYSTEM` rule 2 in `api/_brain.py`.
+- **The Cut: Meera stays the author.** Capture, scoring, drafting and news research are automated;
+  review, edit and publish stay human. Never add auto-posting or auto-scheduling to LinkedIn.
+- **News angle must be sourced.** `news_angle()` drops any item without Google Search grounding, and
+  the draft may state only its reported fact. Any other fact not in the note or "Facts she has already
+  published" (`voice/voice-skill.txt`) must appear as `[VERIFY: ...]`. Never loosen `DRAFT_SYSTEM` rule 2.
 - **Never commit secrets.** `tests/test_offline.py::test_secrets_never_in_repo` enforces this.
-- Voice comes only from `voice/voice_guide.md` and `voice/exemplars.md` (her 4 real posts).
+- Voice comes only from `voice/voice-skill.txt`, `voice/exemplars.md` (4 posts) and `voice/newsletters.md` (11).
 
 ## Everyday changes
 | Change | Where | Then |
 |---|---|---|
-| Voice rule or new published fact | `voice/*.md` | `python scripts/build_voice.py` |
+| Voice rule or new published fact | `voice/voice-skill.txt` | nothing to rebuild; loaded at runtime |
 | New off-voice phrase | `BANNED` in `api/_brain.py` | add a test |
 | Triage rubric or thresholds | `TRIAGE_SYSTEM` in `api/_brain.py` | also update `index.html` Parameters |
 | Draft days, pending cap, model | Vercel env: `DRAFT_DAYS`, `MAX_PENDING_DRAFTS`, `GEMINI_MODEL` | redeploy |
